@@ -11,3 +11,4 @@ packaging
 ninja
 wheel
 accelerate>=0.26.0
+RealtimeSTT
