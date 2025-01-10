@@ -1,0 +1,8 @@
+.aider*
+.env
+*.sqlite
+*.wav
+
+__pycache__/
+voices/
+checkpoints/
