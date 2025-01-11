@@ -89,7 +89,7 @@ def main():
 
         # Set message handler and send test message
         client.set_message_handler(handle_message)
-        client.send_message("Hello server!")
+        # client.send_message("Hello server!")
 
         print("Client started. Streaming audio...")
 
