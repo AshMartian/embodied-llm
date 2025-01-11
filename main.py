@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 import traceback
+import wave
 import grpc
 from grpc import StatusCode
 from RealtimeSTT import AudioToTextRecorder
@@ -39,15 +40,16 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         self.recorder = AudioToTextRecorder(
             model="base",
             language="en",
-            silero_sensitivity=0.5,
-            webrtc_sensitivity=2,
-            post_speech_silence_duration=1.0,
+            # silero_sensitivity=0.5,
+            # webrtc_sensitivity=2,
+            # post_speech_silence_duration=1.0,
             print_transcription_time=False,
             realtime_model_type="base",
             use_microphone=False,
             spinner=False,
             enable_realtime_transcription=False
         )
+        self.audio_chunks = []
         self.current_client = None
 
     def SendMessage(self, request, context):
@@ -93,6 +95,25 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             except Exception as error:  # pylint: disable=broad-except
                 print(f"Error sending response: {error}")
 
+    def save_audio_to_wav(self, filename="received_audio.wav"):
+        """Save collected audio chunks to a WAV file"""
+        if not self.audio_chunks:
+            print("No audio chunks to save")
+            return
+
+        try:
+            wav_file = wave.Wave_write(filename)
+            wav_file.setnchannels(1)  # Mono audio
+            wav_file.setsampwidth(2)  # 16-bit audio
+            wav_file.setframerate(44100)  # 44.1kHz sample rate
+            wav_file.writeframes(b''.join(self.audio_chunks))
+            wav_file.close()
+            print(f"Audio saved to {filename}")
+        except Exception as error:  # pylint: disable=broad-except
+            print(f"Error saving audio: {error}")
+        finally:
+            self.audio_chunks = []  # Clear the buffer
+
     def StreamAudio(self, request_iterator, context):
         """Handle incoming audio stream from client."""
         try:
@@ -107,6 +128,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
                 if request.data == b'STOP':
                     print(f"\nStopping audio stream... Got {chunk_count} chunks")
                     # Process accumulated audio and get transcription
+                    self.save_audio_to_wav()
                     transcribed = self.recorder.text()
                     if transcribed:
                         print(f"\nTranscribed: [{transcribed}]")
@@ -114,6 +136,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
                     continue
 
                 chunk_count += 1
+                self.audio_chunks.append(request.data)
 
                 self.recorder.feed_audio(request.data)
 
