@@ -1,5 +1,9 @@
 """Text-to-speech module using piper TTS engine via shell script."""
+import os
 import subprocess
+
+# Get the directory containing this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def tts(text: str) -> None:
     """Convert text to speech using piper TTS engine.
@@ -7,7 +11,7 @@ def tts(text: str) -> None:
     Args:
         text: The text to convert to speech
     """
-    cmd = ["./tts.sh", f"'{text}'"]
+    cmd = [os.path.join(SCRIPT_DIR, "tts.sh"), f"'{text}'"]
     subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
