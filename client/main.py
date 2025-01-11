@@ -57,6 +57,7 @@ def audio_stream():
             elif is_speaking:
                 silence_chunks += 1
                 if silence_chunks > 10:  # About 0.5 seconds of silence
+                    print("Silence detected, stopping audio stream...")
                     yield AudioChunk(data=b'STOP')  # Send stop signal
                     is_speaking = False
 

@@ -105,6 +105,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
                     continue
 
                 if request.data == b'STOP':
+                    print(f"\nStopping audio stream... Got {chunk_count} chunks")
                     # Process accumulated audio and get transcription
                     transcribed = self.recorder.text()
                     if transcribed:
