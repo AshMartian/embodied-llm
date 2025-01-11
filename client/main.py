@@ -2,8 +2,9 @@
 Main entry point for the gRPC client.
 Connects to server and handles incoming messages by converting them to speech.
 """
-import grpc
 import os
+import traceback
+import grpc
 from grpc_pi.client import PiClient
 from scripts.tts import tts
 
@@ -21,9 +22,17 @@ def main():
     Establishes connection to server and handles incoming messages.
     """
     # Create a gRPC channel
-    channel = grpc.insecure_channel(os.getenv('GRPC_HOST', 'localhost:50051'))  # pylint: disable=no-member
+    server_address = os.getenv('GRPC_HOST', 'localhost:50051')
+    channel = None
 
     try:
+        # Create channel with proper error handling
+        try:
+            channel = grpc.insecure_channel(server_address)
+        except Exception as channel_error:
+            print(f"Failed to create channel: {channel_error}")
+            raise
+
         # Create client
         client = PiClient(channel)
 
@@ -40,10 +49,13 @@ def main():
             print("\nShutting down client...")
             client.close()
 
-    except Exception as error: # pylint: disable=broad-except
+    except Exception as error:  # pylint: disable=broad-except
         print(f"Error running client: {error}")
+        print("Traceback:")
+        print(traceback.format_exc())
     finally:
-        channel.close()
+        if channel:
+            channel.close()
 
 if __name__ == "__main__":
     main()
