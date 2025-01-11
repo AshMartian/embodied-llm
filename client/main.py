@@ -10,10 +10,10 @@ from grpc_pi.client import PiClient
 from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
 
-CHUNK = 2048  # Larger chunk size for more stable audio
+CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 44100  # Higher sample rate for better quality
+RATE = 16000
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -27,94 +27,57 @@ def handle_message(message):
     except Exception as error:  # pylint: disable=broad-except
         print(f"Error converting message to speech: {error}")
 
-def get_audio_config(audio, device_info):  # pylint: disable=unused-argument
-    """Get audio configuration including device and stream parameters"""
-    return {
-        'format': FORMAT,
-        'channels': CHANNELS,
-        'rate': RATE,
-        'chunk': CHUNK,
-        'input': True,
-        'frames_per_buffer': CHUNK
-    }
-
 def setup_audio_stream(audio):
     """Set up and configure the audio stream"""
-    config = get_audio_config(audio, None)
+    # Print available input devices
+    print("\nAvailable Audio Input Devices:")
+    for i in range(audio.get_device_count()):
+        dev_info = audio.get_device_info_by_index(i)
+        if dev_info['maxInputChannels'] > 0:  # Only show input devices
+            print(f"Device {i}: {dev_info['name']}")
 
-    try:
-        stream = audio.open(**config)
-    except OSError as error:
-        print(f"Error opening audio stream: {error}")
-        print("Available configurations:")
-        print(config)
-        raise
-
+    stream = audio.open(format=FORMAT,
+                        input_device_index=1,
+                        channels=CHANNELS,
+                        rate=RATE,
+                        input=True,
+                        frames_per_buffer=CHUNK)
     return stream
-
-def process_audio_chunk(stream, chunk_count, is_speaking, silence_chunks, silence_threshold):
-    """Process a single audio chunk and determine if it contains speech"""
-    data = stream.read(CHUNK, exception_on_overflow=False)
-    audio_data = np.frombuffer(data, dtype=np.int16)
-    audio_level = np.abs(audio_data).mean()
-
-    if audio_level > silence_threshold:
-        is_speaking = True
-        silence_chunks = 0
-    elif is_speaking:
-        silence_chunks += 1
-        if silence_chunks > 20:  # About 1 second of silence
-            print("Silence detected, stopping audio stream...")
-            return data, chunk_count, False, silence_chunks, True
-
-    if is_speaking:
-        chunk_count += 1
-        if chunk_count % 100 == 0:
-            print(f"Sent {chunk_count} audio chunks, level: {audio_level:.0f}")
-        return data, chunk_count, is_speaking, silence_chunks, False
-
-    return data, chunk_count, is_speaking, silence_chunks, False
 
 def audio_stream():
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     audio = pyaudio.PyAudio()
-    stream = None
+    print("Starting audio capture...")
+    stream = setup_audio_stream(audio)
+    silence_threshold = 500  # Adjust this value based on your needs
+    is_speaking = False
+    silence_chunks = 0
 
     try:
-        stream = setup_audio_stream(audio)
-
-        # Dynamic silence threshold based on initial ambient noise
-        silence_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
-        silence_threshold = np.abs(silence_data).mean() * 2.5
-
-        chunk_count = 0
-        is_speaking = False
-        silence_chunks = 0
-
-        print("Starting audio capture loop...")
         while True:
-            try:
-                data, chunk_count, is_speaking, silence_chunks, should_stop = process_audio_chunk(
-                    stream, chunk_count, is_speaking, silence_chunks, silence_threshold
-                )
+            data = stream.read(CHUNK)
+            # Convert audio data to numpy array for level detection
+            audio_data = np.frombuffer(data, dtype=np.int16)
+            audio_level = np.abs(audio_data).mean()
 
-                if should_stop:
-                    yield AudioChunk(data=b'STOP')
-                elif is_speaking:
-                    yield AudioChunk(data=data)
+            if audio_level > silence_threshold:
+                is_speaking = True
+                silence_chunks = 0
+            elif is_speaking:
+                silence_chunks += 1
+                if silence_chunks > 10:  # About 0.5 seconds of silence
+                    yield AudioChunk(data=b'STOP')  # Send stop signal
+                    is_speaking = False
 
-            except IOError as io_error:
-                print(f"IOError reading audio chunk: {io_error}")
-                continue
+            if is_speaking:
+                yield AudioChunk(data=data)
 
     except KeyboardInterrupt:
         print("\nStopping audio stream...")
     finally:
-        if stream:
-            stream.stop_stream()
-            stream.close()
+        stream.stop_stream()
+        stream.close()
         audio.terminate()
-
 def main():
     """
     Main function that starts the gRPC client.
