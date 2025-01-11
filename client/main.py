@@ -10,10 +10,10 @@ from grpc_pi.client import PiClient
 from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
 
-CHUNK = 1024
+CHUNK = 2048  # Larger chunks for more stable streaming
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 16000
+RATE = 44100  # Higher quality audio
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -48,14 +48,24 @@ def audio_stream():
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     audio = pyaudio.PyAudio()
     print("Starting audio capture...")
+    print("Starting audio capture...")
     stream = setup_audio_stream(audio)
     silence_threshold = 500  # Adjust this value based on your needs
     is_speaking = False
     silence_chunks = 0
+    chunk_count = 0
 
     try:
         while True:
             data = stream.read(CHUNK)
+            if chunk_count % 100 == 0:
+                print(f"Sent {chunk_count} chunks")
+            chunk_count += 1
+
+            if chunk_count % 100 == 0:
+                print(f"Sent {chunk_count} chunks")
+            chunk_count += 1
+
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.int16)
             audio_level = np.abs(audio_data).mean()
@@ -65,9 +75,10 @@ def audio_stream():
                 silence_chunks = 0
             elif is_speaking:
                 silence_chunks += 1
-                if silence_chunks > 10:  # About 0.5 seconds of silence
+                if silence_chunks > 20:  # About 1 second of silence at 44.1kHz
                     yield AudioChunk(data=b'STOP')  # Send stop signal
                     is_speaking = False
+                    continue
 
             if is_speaking:
                 yield AudioChunk(data=data)
