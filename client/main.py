@@ -12,9 +12,9 @@ from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
 
 CHUNK = 2048  # Larger chunks for more stable streaming
-FORMAT = pyaudio.paInt16
+FORMAT = pyaudio.paFloat32  # Using float32 for better quality
 CHANNELS = 1
-RATE = 44100  # Higher quality audio
+RATE = 16000  # Match Whisper's expected sample rate
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -51,7 +51,7 @@ def audio_stream():
     try:
         print("Starting audio capture...")
         stream = setup_audio_stream(audio)
-        silence_threshold = 500  # Adjust this value based on your needs
+        silence_threshold = 0.01  # Threshold for float32 values
         is_speaking = False
         silence_chunks = 0
         total_chunks = 0
@@ -73,8 +73,8 @@ def audio_stream():
                 return None
 
             # Convert audio data to numpy array for level detection
-            audio_data = np.frombuffer(data, dtype=np.int16)
-            audio_level = np.abs(audio_data).mean()
+            audio_data = np.frombuffer(data, dtype=np.float32)
+            audio_level = np.max(np.abs(audio_data))
 
             if audio_level > silence_threshold:
                 is_speaking = True
@@ -82,7 +82,7 @@ def audio_stream():
             elif is_speaking:
                 silence_chunks += 1
                 if silence_chunks > 20:  # About 1 second of silence
-                    yield AudioChunk(data=b'STOP')
+                    yield AudioChunk(data=b'STOP')  # Signal end of speech
                     is_speaking = False
                     return None
 

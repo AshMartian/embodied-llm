@@ -40,14 +40,14 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         self.recorder = AudioToTextRecorder(
             model="base",
             language="en",
-            # silero_sensitivity=0.5,
-            # webrtc_sensitivity=2,
-            # post_speech_silence_duration=1.0,
+            silero_sensitivity=0.5,
+            webrtc_sensitivity=2,
+            post_speech_silence_duration=0.5,
             print_transcription_time=False,
             realtime_model_type="base",
             use_microphone=False,
             spinner=False,
-            enable_realtime_transcription=False
+            enable_realtime_transcription=True
         )
         self.audio_chunks = []
         self.current_client = None
@@ -147,7 +147,11 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             print(f"Received {chunk_count} chunks")
 
         self.audio_chunks.append(request.data)
-        self.recorder.feed_audio(request.data)
+        try:
+            self.recorder.feed_audio(request.data)
+        except (ValueError, RuntimeError, IOError) as error:
+            print(f"Error feeding audio: {error}")
+            traceback.print_exc()
         return chunk_count
 
     def StreamAudio(self, request_iterator, context):
