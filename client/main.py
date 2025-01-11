@@ -15,6 +15,24 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100  # Higher sample rate for better quality
 
+def find_input_device(audio):
+    """Find the best available input device"""
+    # Try to find pulse audio first as it's usually the most reliable on Linux
+    for i in range(audio.get_device_count()):
+        dev_info = audio.get_device_info_by_index(i)
+        if dev_info['maxInputChannels'] > 0:
+            if 'pulse' in dev_info['name'].lower():
+                return dev_info
+
+    # If no pulse audio, try to find any USB audio device
+    for i in range(audio.get_device_count()):
+        dev_info = audio.get_device_info_by_index(i)
+        if dev_info['maxInputChannels'] > 0 and 'usb' in dev_info['name'].lower():
+            return dev_info
+
+    # Fall back to default device
+    return audio.get_default_input_device_info()
+
 def handle_message(message):
     """Handle incoming messages by converting them to speech"""
     try:
@@ -23,13 +41,11 @@ def handle_message(message):
     except Exception as error:  # pylint: disable=broad-except
         print(f"Error converting message to speech: {error}")
 
-def get_audio_config(audio):
+def get_audio_config(audio, device_info):  # pylint: disable=unused-argument
     """Get audio configuration including device and stream parameters"""
-    # Find the default input device
-    default_device = audio.get_default_input_device_info()
     return {
-        'device_index': default_device['index'],
-        'device_name': default_device['name'],
+        'device_index': device_info['index'],
+        'device_name': device_info['name'],
         'format': FORMAT,
         'channels': CHANNELS,
         'rate': RATE,
@@ -48,8 +64,9 @@ def setup_audio_stream(audio):
         if dev_info['maxInputChannels'] > 0:  # Only show input devices
             print(f"Device {i}: {dev_info['name']}")
 
+    device_info = find_input_device(audio)
     # Get audio configuration
-    config = get_audio_config(audio)
+    config = get_audio_config(audio, device_info)
     print(f"\nUsing default input device: {config['device_name']} (index {config['device_index']})")
 
     try:
