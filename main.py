@@ -18,11 +18,33 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     def __init__(self):
         self.recorder = AudioToTextRecorder(
             model="small",
-            use_microphone=False,
-            enable_realtime_transcription=True,
-            on_realtime_transcription_stabilized=self.handle_transcription
+            print_transcription_time=False,
+            spinner=False
         )
         self.current_client = None
+
+    def SendMessage(self, request, context):
+        """
+        Handle incoming messages from client.
+
+        Args:
+            request: MessageRequest containing text
+            context: gRPC context
+
+        Returns:
+            MessageResponse with generated reply
+        """
+        try:
+            # Generate response to the message
+            response_text = generate_response(request.text)
+
+            # Create and return response
+            return MessageResponse(reply=response_text)
+
+        except (ValueError, RuntimeError) as error:
+            print(f"Error handling message: {error}")
+            context.abort(StatusCode.INTERNAL, str(error))
+            return MessageResponse(reply="Error processing request")
 
     def handle_transcription(self, text: str) -> None:
         """Handle transcribed text by generating and sending response"""
