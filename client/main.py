@@ -4,6 +4,7 @@ Connects to server and handles incoming messages by converting them to speech.
 """
 import os
 import traceback
+import time
 import numpy as np
 import pyaudio
 from grpc_pi.client import PiClient
@@ -47,24 +48,29 @@ def setup_audio_stream(audio):
 def audio_stream():
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     audio = pyaudio.PyAudio()
-    print("Starting audio capture...")
-    print("Starting audio capture...")
-    stream = setup_audio_stream(audio)
-    silence_threshold = 500  # Adjust this value based on your needs
-    is_speaking = False
-    silence_chunks = 0
-    chunk_count = 0
-
     try:
-        while True:
-            data = stream.read(CHUNK)
-            if chunk_count % 100 == 0:
-                print(f"Sent {chunk_count} chunks")
-            chunk_count += 1
+        print("Starting audio capture...")
+        stream = setup_audio_stream(audio)
+        silence_threshold = 500  # Adjust this value based on your needs
+        is_speaking = False
+        silence_chunks = 0
+        total_chunks = 0
 
-            if chunk_count % 100 == 0:
-                print(f"Sent {chunk_count} chunks")
-            chunk_count += 1
+        def process_audio():
+            nonlocal total_chunks, is_speaking, silence_chunks
+            data = stream.read(CHUNK, exception_on_overflow=False)
+
+            if total_chunks % 100 == 0:
+                print(f"Sent {total_chunks} chunks")
+            total_chunks += 1
+
+            # Reset connection if needed
+            if total_chunks >= 290:  # Reset before hitting 300
+                print("Resetting stream connection...")
+                yield AudioChunk(data=b'RESET')
+                total_chunks = 0
+                time.sleep(0.1)  # Brief pause before continuing
+                return None
 
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.int16)
@@ -75,16 +81,21 @@ def audio_stream():
                 silence_chunks = 0
             elif is_speaking:
                 silence_chunks += 1
-                if silence_chunks > 20:  # About 1 second of silence at 44.1kHz
-                    yield AudioChunk(data=b'STOP')  # Send stop signal
+                if silence_chunks > 20:  # About 1 second of silence
+                    yield AudioChunk(data=b'STOP')
                     is_speaking = False
-                    continue
+                    return None
 
             if is_speaking:
                 yield AudioChunk(data=data)
+            return None
 
-    except KeyboardInterrupt:
-        print("\nStopping audio stream...")
+        while True:
+            try:
+                yield from process_audio()
+            except IOError as io_error:
+                print(f"IOError in audio stream: {io_error}")
+                time.sleep(0.1)  # Brief pause on error
     finally:
         stream.stop_stream()
         stream.close()
@@ -97,24 +108,30 @@ def main():
     # Create a gRPC channel
     server_address = os.getenv('GRPC_HOST', 'localhost:50051')
 
+    def run_client():
+        nonlocal client
+        for response in client.stream_audio(audio_stream()):
+            if response:
+                print(f"Transcribed: {response}")
+
+    # Create client with server address
+    client = PiClient(server_address)
+
+    # Set message handler and send test message
+    client.set_message_handler(handle_message)
+    print("Client started. Streaming audio...")
+
     try:
-        # Create client with server address
-        client = PiClient(server_address)
-
-        # Set message handler and send test message
-        client.set_message_handler(handle_message)
-        # client.send_message("Hello server!")
-
-        print("Client started. Streaming audio...")
-
-        # Keep the client running
+        # Start streaming audio
         try:
-            # Start streaming audio
-            for response in client.stream_audio(audio_stream()):
-                if response:
-                    print(f"Transcribed: {response}")
             while True:
-                pass
+                try:
+                    run_client()
+                except Exception as stream_error:  # pylint: disable=broad-except
+                    print(f"Stream error, reconnecting: {stream_error}")
+                    client.close()
+                    client = PiClient(server_address)
+                    time.sleep(1)  # Wait before reconnecting
         except KeyboardInterrupt:
             print("\nShutting down client...")
             client.close()

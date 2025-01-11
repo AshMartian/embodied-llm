@@ -121,7 +121,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             return chunk_count
 
         if request.data == b'STOP':
-            print(f"\nStopping audio stream... Got {chunk_count} chunks")
+            print(f"\nProcessing audio... Got {chunk_count} chunks")
             # Process accumulated audio and get transcription
             self.save_audio_to_wav()
             transcribed = self.recorder.text()
@@ -129,6 +129,18 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
                 print(f"\nTranscribed: [{transcribed}]")
                 generate_response(transcribed, callback=self.send_response)
             return chunk_count
+
+        if request.data == b'RESET':
+            print(f"\nResetting stream... Processed {chunk_count} chunks")
+            self.audio_chunks = []  # Clear buffer
+            # Create fresh recorder instance
+            self.recorder = AudioToTextRecorder(
+                model="base",
+                language="en",
+                use_microphone=False,
+                spinner=False,
+                enable_realtime_transcription=False)
+            return 0  # Reset chunk count
 
         chunk_count += 1
         if chunk_count % 100 == 0:
@@ -143,6 +155,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         try:
             self.current_client = context
             print("Starting to receive audio stream...")
+            self.recorder.start()
             chunk_count = 0
 
             for request in request_iterator:
