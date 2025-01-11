@@ -4,8 +4,15 @@ Connects to server and handles incoming messages by converting them to speech.
 """
 import os
 import traceback
+import pyaudio
 from grpc_pi.client import PiClient
+from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
+
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 16000
 
 def handle_message(message):
     """Handle incoming messages by converting them to speech"""
@@ -14,6 +21,26 @@ def handle_message(message):
         tts(message)
     except Exception as error:  # pylint: disable=broad-except
         print(f"Error converting message to speech: {error}")
+
+def audio_stream():
+    """Generate stream of audio chunks from microphone"""
+    audio = pyaudio.PyAudio()
+    stream = audio.open(format=FORMAT,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK)
+
+    try:
+        while True:
+            data = stream.read(CHUNK)
+            yield AudioChunk(data=data)
+    except KeyboardInterrupt:
+        print("\nStopping audio stream...")
+    finally:
+        stream.stop_stream()
+        stream.close()
+        audio.terminate()
 
 def main():
     """
@@ -31,10 +58,14 @@ def main():
         client.set_message_handler(handle_message)
         client.send_message("Hello server!")
 
-        print("Client started. Waiting for messages...")
+        print("Client started. Streaming audio...")
 
         # Keep the client running
         try:
+            # Start streaming audio
+            for response in client.stream_audio(audio_stream()):
+                if response:
+                    print(f"Transcribed: {response}")
             while True:
                 pass
         except KeyboardInterrupt:
