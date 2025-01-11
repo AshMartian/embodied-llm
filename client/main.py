@@ -17,20 +17,6 @@ RATE = 44100  # Higher sample rate for better quality
 
 def find_input_device(audio):
     """Find the best available input device"""
-    # Try to find pulse audio first as it's usually the most reliable on Linux
-    for i in range(audio.get_device_count()):
-        dev_info = audio.get_device_info_by_index(i)
-        if dev_info['maxInputChannels'] > 0:
-            if 'pulse' in dev_info['name'].lower():
-                return dev_info
-
-    # If no pulse audio, try to find any USB audio device
-    for i in range(audio.get_device_count()):
-        dev_info = audio.get_device_info_by_index(i)
-        if dev_info['maxInputChannels'] > 0 and 'usb' in dev_info['name'].lower():
-            return dev_info
-
-    # Fall back to default device
     return audio.get_default_input_device_info()
 
 def handle_message(message):
@@ -44,30 +30,17 @@ def handle_message(message):
 def get_audio_config(audio, device_info):  # pylint: disable=unused-argument
     """Get audio configuration including device and stream parameters"""
     return {
-        'device_index': device_info['index'],
-        'device_name': device_info['name'],
         'format': FORMAT,
         'channels': CHANNELS,
         'rate': RATE,
         'chunk': CHUNK,
         'input': True,
-        'frames_per_buffer': CHUNK,
-        'input_host_api_specific_stream_info': None
+        'frames_per_buffer': CHUNK
     }
 
 def setup_audio_stream(audio):
     """Set up and configure the audio stream"""
-    # Print available input devices
-    print("\nAvailable Audio Input Devices:")
-    for i in range(audio.get_device_count()):
-        dev_info = audio.get_device_info_by_index(i)
-        if dev_info['maxInputChannels'] > 0:  # Only show input devices
-            print(f"Device {i}: {dev_info['name']}")
-
-    device_info = find_input_device(audio)
-    # Get audio configuration
-    config = get_audio_config(audio, device_info)
-    print(f"\nUsing default input device: {config['device_name']} (index {config['device_index']})")
+    config = get_audio_config(audio, None)
 
     try:
         stream = audio.open(**config)
@@ -76,10 +49,6 @@ def setup_audio_stream(audio):
         print("Available configurations:")
         print(config)
         raise
-
-    # Print actual stream info
-    stream_info = stream.get_input_latency()
-    print(f"Input latency: {stream_info*1000:.1f}ms")
 
     return stream
 
