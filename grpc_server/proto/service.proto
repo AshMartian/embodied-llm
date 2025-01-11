@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+service PiServer {
+    // Bidirectional streaming for audio
+    rpc StreamAudio (stream AudioChunk) returns (stream AudioResponse);
+
+    // Streaming images
+    rpc SendImage (ImageFrame) returns (ImageResponse);
+
+    // Messaging and function calls
+    rpc SendMessage (MessageRequest) returns (MessageResponse);
+}
+
+message AudioChunk {
+    bytes data = 1; // Raw audio bytes
+}
+
+message AudioResponse {
+    string text = 1; // Transcribed text or TTS response
+}
+
+message ImageFrame {
+    bytes data = 1; // Encoded image data (e.g., JPEG)
+    string timestamp = 2;
+}
+
+message ImageResponse {
+    string description = 1; // Processed image result
+}
+
+message MessageRequest {
+    string text = 1; // Command or query
+}
+
+message MessageResponse {
+    string reply = 1; // LLM response
+    string action = 2; // Optional function to invoke
+}

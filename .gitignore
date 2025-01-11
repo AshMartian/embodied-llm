@@ -3,6 +3,7 @@
 .venv/
 *.sqlite
 *.wav
+*.log
 
 __pycache__/
 voices/

@@ -1,3 +1,7 @@
 soundfile
 simpleaudio
 piper
+grpcio
+grpcio-tools
+protobuf
+python-dotenv

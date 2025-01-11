@@ -10,7 +10,7 @@ This project is currently under active development and is functional, but still 
 
 *   **Live Voice Transcription:** Uses `whisper` to transcribe spoken audio in real-time.
 *   **AI Response Generation:** Employs `pydantic-ai` and `ollama` to generate conversational responses.
-*   **Text-to-Speech:** Uses `parler-tts` for generating speech from text.
+*   **Text-to-Speech:** Uses `parler-tts` on server for development, and `piper-tts` on Raspberry Pi client for efficient edge deployment.
 *   **Live Interaction:** Uses `pyaudio` to capture live audio input and `simpleaudio` for playback.
 *   **Memory:** Uses a SQLite database to store conversation history for context.
 
@@ -25,14 +25,15 @@ This project is currently under active development and is functional, but still 
     *   `fish.py`: A script for a separate audio processing model (likely for voice cloning or modification).
     *   `mars.py`: A script for another TTS model, `mars5-tts`, with voice cloning capabilities.
 
-### Current Limitations
+### Current Status and Limitations
 *   The system is still under development and may have bugs or unexpected behavior.
 *   The performance and robustness of the live transcription and TTS components may vary.
 *   The system is currently configured to use specific models and may require adjustments for different hardware or environments.
+*   Server uses Parler TTS for development while client successfully implements Piper TTS for edge deployment
 
 ### Future Development
 *   The goal of this project is to create an embodied LLM that can see/hear/communicate/move through a Raspberry Pi Python gRPC proxy.
-*   Replace `parler-tts` with `PiperTTS` as it will run better on edge with a Raspberry Pi.
+*   ✅ Implemented `piper-tts` on the Raspberry Pi client for efficient edge deployment
 *   Improve the robustness and performance of the live transcription and TTS components.
 *   Add more features and capabilities to the AI agents.
 *   Improve the user experience and make the system more user-friendly.
@@ -81,7 +82,8 @@ This project is currently under active development and is functional, but still 
 #### **Phase 3: Implement Audio Streaming**
 1. **Server**:
    - Implement bidirectional streaming for audio (e.g., real-time text transcription or audio responses).
-   - Integrate an alternative TTS system to generate high-quality responses on the server.
+   - ✅ Server uses Parler TTS for development
+   - ✅ Client uses Piper TTS for efficient edge deployment
 
 2. **Client**:
    - Use a lightweight Python audio library like `pyaudio` or `sounddevice`.
