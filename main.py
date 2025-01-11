@@ -3,6 +3,9 @@ Main entry point for the gRPC server.
 Starts a server that listens for transcription requests and handles them using LiveTranscriber.
 """
 from concurrent import futures
+import os
+import sys
+import subprocess
 import traceback
 import grpc
 from grpc import StatusCode
@@ -11,6 +14,22 @@ from response_generation import generate_response
 from grpc_server.service_pb2 import MessageResponse, AudioResponse
 from grpc_server import service_pb2_grpc
 
+def ensure_ffmpeg():
+    """Ensure FFmpeg is installed and in PATH"""
+    try:
+        subprocess.run(
+            ['ffmpeg', '-version'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("FFmpeg not found, installing...")
+        if sys.platform == 'win32':
+            os.system('winget install ffmpeg')
+        else:
+            os.system('sudo apt-get update && sudo apt-get install -y ffmpeg')
+
 class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     """
     Implementation of the Pi gRPC server servicer.
@@ -18,12 +37,16 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     """
     def __init__(self):
         self.recorder = AudioToTextRecorder(
-            model="small",
-            on_realtime_transcription_stabilized=self.handle_transcription,
+            model="base",
+            language="en",
+            silero_sensitivity=0.5,
+            webrtc_sensitivity=2,
+            post_speech_silence_duration=1.0,
             print_transcription_time=False,
+            realtime_model_type="base",
             use_microphone=False,
             spinner=False,
-            enable_realtime_transcription=True
+            enable_realtime_transcription=False
         )
         self.current_client = None
 
@@ -54,8 +77,9 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         """Handle transcribed text by generating and sending response
 
         Args:
-            transcribed_text: The stabilized transcription from RealtimeSTT
+            transcribed_text: The transcription from RealtimeSTT
         """
+        print(f"\rTranscribed: [{transcribed_text}]", end='', flush=True)
         if self.current_client and transcribed_text:
             # Generate response asynchronously
             generate_response(transcribed_text, callback=self.send_response)
@@ -69,39 +93,28 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             except Exception as error:  # pylint: disable=broad-except
                 print(f"Error sending response: {error}")
 
-    def StreamAudio(self, request_iterator, context) -> AudioResponse:
-        """
-        Handle incoming audio stream from client.
-        Args:
-            request_iterator: Iterator of audio chunks
-            context: gRPC context
-        Returns:
-            Empty response when stream ends
-        """
+    def StreamAudio(self, request_iterator, context):
+        """Handle incoming audio stream from client."""
         try:
             self.current_client = context
-
-            # Process incoming audio chunks with RealtimeSTT
+            print("Starting to receive audio stream...")
+            chunk_count = 0
             for request in request_iterator:
                 if not hasattr(request, 'data'):
                     print(f"Invalid request format: {request}")
                     continue
 
-                audio_data = request.data
-                if not audio_data:
-                    print("Empty audio data received")
+                if request.data == b'STOP':
+                    # Process accumulated audio and get transcription
+                    transcribed = self.recorder.text()
+                    if transcribed:
+                        print(f"\nTranscribed: [{transcribed}]")
+                        generate_response(transcribed, callback=self.send_response)
                     continue
 
-                print(f"Received audio chunk of size: {len(audio_data)} bytes")
-                # Feed audio data to RealtimeSTT for processing
-                self.recorder.feed_audio(audio_data)
+                chunk_count += 1
 
-            # Get final transcription if any remains
-            final_text = self.recorder.text()
-            if final_text:
-                self.handle_transcription(final_text)
-
-            return AudioResponse()
+                self.recorder.feed_audio(request.data)
 
         except (ValueError, RuntimeError, IOError) as error:
             print(f"Error processing audio stream: {error}")
@@ -110,9 +123,13 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             context.abort(StatusCode.INTERNAL, str(error))
             return AudioResponse()
         finally:
+            print("Audio stream ended")
             self.current_client = None
 
+        return AudioResponse()
+
 if __name__ == "__main__":
+    ensure_ffmpeg()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))  # pylint: disable=not-callable
     service_pb2_grpc.add_PiServerServicer_to_server(LiveTranscriber(), server)
     server.add_insecure_port('[::]:50051')
