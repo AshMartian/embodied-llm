@@ -3,6 +3,7 @@ Main entry point for the gRPC server.
 Starts a server that listens for transcription requests and handles them using LiveTranscriber.
 """
 from concurrent import futures
+import traceback
 import grpc
 from grpc import StatusCode
 from RealtimeSTT import AudioToTextRecorder
@@ -18,8 +19,11 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     def __init__(self):
         self.recorder = AudioToTextRecorder(
             model="small",
+            on_realtime_transcription_stabilized=self.handle_transcription,
             print_transcription_time=False,
-            spinner=False
+            use_microphone=False,
+            spinner=False,
+            enable_realtime_transcription=True
         )
         self.current_client = None
 
@@ -46,11 +50,15 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             context.abort(StatusCode.INTERNAL, str(error))
             return MessageResponse(reply="Error processing request")
 
-    def handle_transcription(self, text: str) -> None:
-        """Handle transcribed text by generating and sending response"""
-        if self.current_client and text:
+    def handle_transcription(self, transcribed_text: str) -> None:
+        """Handle transcribed text by generating and sending response
+
+        Args:
+            transcribed_text: The stabilized transcription from RealtimeSTT
+        """
+        if self.current_client and transcribed_text:
             # Generate response asynchronously
-            generate_response(text, callback=self.send_response)
+            generate_response(transcribed_text, callback=self.send_response)
 
     def send_response(self, response_text: str) -> None:
         """Send response back to client via gRPC"""
@@ -64,26 +72,41 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     def StreamAudio(self, request_iterator, context) -> AudioResponse:
         """
         Handle incoming audio stream from client.
-
         Args:
             request_iterator: Iterator of audio chunks
             context: gRPC context
-
         Returns:
             Empty response when stream ends
         """
         try:
             self.current_client = context
 
-            # Process incoming audio chunks
+            # Process incoming audio chunks with RealtimeSTT
             for request in request_iterator:
-                # Feed audio data to RealtimeSTT
-                self.recorder.feed_audio(request.audio_data)
+                if not hasattr(request, 'data'):
+                    print(f"Invalid request format: {request}")
+                    continue
+
+                audio_data = request.data
+                if not audio_data:
+                    print("Empty audio data received")
+                    continue
+
+                print(f"Received audio chunk of size: {len(audio_data)} bytes")
+                # Feed audio data to RealtimeSTT for processing
+                self.recorder.feed_audio(audio_data)
+
+            # Get final transcription if any remains
+            final_text = self.recorder.text()
+            if final_text:
+                self.handle_transcription(final_text)
 
             return AudioResponse()
 
-        except Exception as error:  # pylint: disable=broad-except
+        except (ValueError, RuntimeError, IOError) as error:
             print(f"Error processing audio stream: {error}")
+            print("Traceback:")
+            traceback.print_exc()
             context.abort(StatusCode.INTERNAL, str(error))
             return AudioResponse()
         finally:
