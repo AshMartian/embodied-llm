@@ -39,10 +39,8 @@ def get_audio_config(audio):
         'input_host_api_specific_stream_info': None
     }
 
-def audio_stream():
-    """Generate stream of audio chunks from microphone when audio levels are above threshold"""
-    audio = pyaudio.PyAudio()
-
+def setup_audio_stream(audio):
+    """Set up and configure the audio stream"""
     # Print available input devices
     print("\nAvailable Audio Input Devices:")
     for i in range(audio.get_device_count()):
@@ -54,49 +52,81 @@ def audio_stream():
     config = get_audio_config(audio)
     print(f"\nUsing default input device: {config['device_name']} (index {config['device_index']})")
 
-    # Configure stream parameters
-    stream = audio.open(**config)
+    try:
+        stream = audio.open(**config)
+    except OSError as error:
+        print(f"Error opening audio stream: {error}")
+        print("Available configurations:")
+        print(config)
+        raise
 
     # Print actual stream info
     stream_info = stream.get_input_latency()
     print(f"Input latency: {stream_info*1000:.1f}ms")
 
-    chunk_count = 0
-    # Dynamic silence threshold based on initial ambient noise
-    silence_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
-    silence_threshold = np.abs(silence_data).mean() * 2.5
-    is_speaking = False
-    silence_chunks = 0
+    return stream
+
+def process_audio_chunk(stream, chunk_count, is_speaking, silence_chunks, silence_threshold):
+    """Process a single audio chunk and determine if it contains speech"""
+    data = stream.read(CHUNK, exception_on_overflow=False)
+    audio_data = np.frombuffer(data, dtype=np.int16)
+    audio_level = np.abs(audio_data).mean()
+
+    if audio_level > silence_threshold:
+        is_speaking = True
+        silence_chunks = 0
+    elif is_speaking:
+        silence_chunks += 1
+        if silence_chunks > 20:  # About 1 second of silence
+            print("Silence detected, stopping audio stream...")
+            return data, chunk_count, False, silence_chunks, True
+
+    if is_speaking:
+        chunk_count += 1
+        if chunk_count % 100 == 0:
+            print(f"Sent {chunk_count} audio chunks, level: {audio_level:.0f}")
+        return data, chunk_count, is_speaking, silence_chunks, False
+
+    return data, chunk_count, is_speaking, silence_chunks, False
+
+def audio_stream():
+    """Generate stream of audio chunks from microphone when audio levels are above threshold"""
+    audio = pyaudio.PyAudio()
+    stream = None
+
     try:
+        stream = setup_audio_stream(audio)
+
+        # Dynamic silence threshold based on initial ambient noise
+        silence_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
+        silence_threshold = np.abs(silence_data).mean() * 2.5
+
+        chunk_count = 0
+        is_speaking = False
+        silence_chunks = 0
+
+        print("Starting audio capture loop...")
         while True:
-            data = stream.read(CHUNK)
-            # Convert audio data to numpy array for level detection
-            audio_data = np.frombuffer(data, dtype=np.int16)
-            audio_level = np.abs(audio_data).mean()
+            try:
+                data, chunk_count, is_speaking, silence_chunks, should_stop = process_audio_chunk(
+                    stream, chunk_count, is_speaking, silence_chunks, silence_threshold
+                )
 
-            if audio_level > silence_threshold:
-                is_speaking = True
-                silence_chunks = 0
-            elif is_speaking:
-                silence_chunks += 1
-                if silence_chunks > 20:  # About 1 second of silence at 44.1kHz
-                    print("Silence detected, stopping audio stream...")
-                    yield AudioChunk(data=b'STOP')  # Send stop signal
-                    is_speaking = False
+                if should_stop:
+                    yield AudioChunk(data=b'STOP')
+                elif is_speaking:
+                    yield AudioChunk(data=data)
 
-            if is_speaking:
-                chunk_count += 1
-                if chunk_count % 100 == 0:
-                    print(f"Sent {chunk_count} audio chunks, level: {audio_level:.0f}")
-                yield AudioChunk(data=data)
+            except IOError as io_error:
+                print(f"IOError reading audio chunk: {io_error}")
+                continue
+
     except KeyboardInterrupt:
         print("\nStopping audio stream...")
-    except Exception as error:  # pylint: disable=broad-except
-        print(f"Error in audio stream: {error}")
-        traceback.print_exc()
     finally:
-        stream.stop_stream()
-        stream.close()
+        if stream:
+            stream.stop_stream()
+            stream.close()
         audio.terminate()
 
 def main():

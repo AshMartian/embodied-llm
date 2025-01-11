@@ -114,33 +114,47 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         finally:
             self.audio_chunks = []  # Clear the buffer
 
+    def process_audio_request(self, request, chunk_count):
+        """Process a single audio request"""
+        if not hasattr(request, 'data'):
+            print(f"Invalid request format: {request}")
+            return chunk_count
+
+        if request.data == b'STOP':
+            print(f"\nStopping audio stream... Got {chunk_count} chunks")
+            # Process accumulated audio and get transcription
+            self.save_audio_to_wav()
+            transcribed = self.recorder.text()
+            if transcribed:
+                print(f"\nTranscribed: [{transcribed}]")
+                generate_response(transcribed, callback=self.send_response)
+            return chunk_count
+
+        chunk_count += 1
+        if chunk_count % 100 == 0:
+            print(f"Received {chunk_count} chunks")
+
+        self.audio_chunks.append(request.data)
+        self.recorder.feed_audio(request.data)
+        return chunk_count
+
     def StreamAudio(self, request_iterator, context):
         """Handle incoming audio stream from client."""
         try:
             self.current_client = context
             print("Starting to receive audio stream...")
             chunk_count = 0
+
             for request in request_iterator:
-                if not hasattr(request, 'data'):
-                    print(f"Invalid request format: {request}")
-                    continue
+                try:
+                    chunk_count = self.process_audio_request(request, chunk_count)
+                except RuntimeError as runtime_error:
+                    print(f"Error processing audio chunk: {runtime_error}")
+                    traceback.print_exc()
+                    context.abort(StatusCode.INTERNAL, str(runtime_error))
+                    return AudioResponse()
 
-                if request.data == b'STOP':
-                    print(f"\nStopping audio stream... Got {chunk_count} chunks")
-                    # Process accumulated audio and get transcription
-                    self.save_audio_to_wav()
-                    transcribed = self.recorder.text()
-                    if transcribed:
-                        print(f"\nTranscribed: [{transcribed}]")
-                        generate_response(transcribed, callback=self.send_response)
-                    continue
-
-                chunk_count += 1
-                self.audio_chunks.append(request.data)
-
-                self.recorder.feed_audio(request.data)
-
-        except (ValueError, RuntimeError, IOError) as error:
+        except (ValueError, IOError) as error:
             print(f"Error processing audio stream: {error}")
             print("Traceback:")
             traceback.print_exc()
