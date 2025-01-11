@@ -12,7 +12,7 @@ from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
 
 CHUNK = 2048  # Larger chunks for more stable streaming
-FORMAT = pyaudio.paFloat32  # Using float32 for better quality
+FORMAT = pyaudio.paInt16  # Using float32 for better quality
 CHANNELS = 1
 RATE = 16000  # Match Whisper's expected sample rate
 
@@ -73,7 +73,7 @@ def audio_stream():
             #     return None
 
             # Convert audio data to numpy array for level detection
-            audio_data = np.frombuffer(data, dtype=np.float32)
+            audio_data = np.frombuffer(data, dtype=np.int16)
             audio_level = np.max(np.abs(audio_data))
 
             if audio_level > silence_threshold:

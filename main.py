@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 import traceback
+import threading
 import wave
 import grpc
 from grpc import StatusCode
@@ -75,23 +76,30 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             context.abort(StatusCode.INTERNAL, str(error))
             return MessageResponse(reply="Error processing request")
 
-    def handle_transcription(self, transcribed_text: str) -> None:
+    def handle_transcription(self, transcribed_text: str, context) -> None:
         """Handle transcribed text by generating and sending response
 
         Args:
             transcribed_text: The transcription from RealtimeSTT
+            context: The gRPC context for sending responses
         """
         print(f"\rTranscribed: [{transcribed_text}]", end='', flush=True)
-        if self.current_client and transcribed_text:
+        if context and transcribed_text:
             # Generate response asynchronously
-            generate_response(transcribed_text, callback=self.send_response)
+            threading.Thread(
+                target=lambda: generate_response(
+                    transcribed_text,
+                    callback=lambda resp: self.send_response(resp, context)
+                )
+            ).start()
 
-    def send_response(self, response_text: str) -> None:
+    @staticmethod
+    def send_response(response_text: str, context) -> None:
         """Send response back to client via gRPC"""
-        if self.current_client:
+        if context:
             try:
-                response = MessageResponse(message=response_text)
-                self.current_client.SendMessage(response)
+                response = AudioResponse(text=response_text)
+                context.write(response)
             except Exception as error:  # pylint: disable=broad-except
                 print(f"Error sending response: {error}")
 
@@ -105,7 +113,7 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             wav_file = wave.Wave_write(filename)
             wav_file.setnchannels(1)  # Mono audio
             wav_file.setsampwidth(2)  # 16-bit audio
-            wav_file.setframerate(44100)  # 44.1kHz sample rate
+            wav_file.setframerate(16000)  # 16kHz sample rate
             wav_file.writeframes(b''.join(self.audio_chunks))
             wav_file.close()
             print(f"Audio saved to {filename}")
@@ -151,10 +159,17 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
     def StreamAudio(self, request_iterator, context):
         """Handle incoming audio stream from client."""
         try:
-            self.current_client = context
             print("Starting to receive audio stream...")
             self.recorder.start()
             chunk_count = 0
+
+            # Set up transcription callback
+            def on_transcription(text):
+                print(f"\rTranscribed: [{text}]", end='')
+                if text:
+                    self.handle_transcription(text, context)
+
+            self.recorder.on_transcribe = on_transcription
 
             for request in request_iterator:
                 try:
@@ -173,7 +188,6 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
             return AudioResponse()
         finally:
             print("Audio stream ended")
-            self.current_client = None
 
         return AudioResponse()
 
