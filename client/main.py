@@ -51,7 +51,7 @@ def audio_stream():
     try:
         print("Starting audio capture...")
         stream = setup_audio_stream(audio)
-        silence_threshold = 0.1  # Threshold for float32 values
+        silence_threshold = 500  # Threshold for float32 values
         is_speaking = False
         silence_chunks = 0
         total_chunks = 0
@@ -74,7 +74,7 @@ def audio_stream():
 
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.int16)
-            audio_level = np.max(np.abs(audio_data))
+            audio_level = np.abs(audio_data).mean()
 
             if audio_level > silence_threshold:
                 is_speaking = True
