@@ -22,14 +22,14 @@ def main():
     """
     # Create a gRPC channel
     server_address = os.getenv('GRPC_HOST', 'localhost:50051')
-    channel = None
 
     try:
         # Create client with server address
         client = PiClient(server_address)
 
-        # Set message handler
-        client.set_message_handler(handle_message)  # pylint: disable=no-member
+        # Set message handler and send test message
+        client.set_message_handler(handle_message)
+        client.send_message("Hello server!")
 
         print("Client started. Waiting for messages...")
 
@@ -45,9 +45,6 @@ def main():
         print(f"Error running client: {error}")
         print("Traceback:")
         print(traceback.format_exc())
-    finally:
-        if channel:
-            channel.close()
 
 if __name__ == "__main__":
     main()

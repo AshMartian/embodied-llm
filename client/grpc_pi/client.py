@@ -18,6 +18,7 @@ class PiClient:
     def __init__(self, host=None):
         if host is None:
             host = os.getenv('GRPC_HOST', 'localhost:50051')
+        self.message_handler = None
         try:
             # pylint: disable=no-member
             self.channel = grpc.insecure_channel(host)
@@ -62,17 +63,25 @@ class PiClient:
     def send_message(self, text):
         """
         Send a text message to the server.
-
         Args:
             text: Message text to send
-
         Returns:
             tuple: (reply text, action to take)
         """
         # pylint: disable=no-member
         request = service_pb2.MessageRequest(text=text)
         response = self.stub.SendMessage(request)
-        return response.reply, response.action
+        if hasattr(self, 'message_handler') and self.message_handler:
+            self.message_handler(response.reply)
+        return response.reply
+
+    def set_message_handler(self, handler):
+        """
+        Set callback function for handling received messages.
+        Args:
+            handler: Function that takes a message string parameter
+        """
+        self.message_handler = handler
 
     def close(self):
         """
