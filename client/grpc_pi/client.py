@@ -18,8 +18,12 @@ class PiClient:
     def __init__(self, host=None):
         if host is None:
             host = os.getenv('GRPC_HOST', 'localhost:50051')
-        # pylint: disable=no-member
-        self.channel = grpc.insecure_channel(host)
+        try:
+            # pylint: disable=no-member
+            self.channel = grpc.insecure_channel(host)
+        except Exception as error:
+            print(f"Failed to create channel: {error}")
+            raise
         self.stub = service_pb2_grpc.PiServerStub(self.channel)
 
     def stream_audio(self, audio_iterator):

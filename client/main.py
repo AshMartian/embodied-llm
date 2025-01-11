@@ -4,7 +4,6 @@ Connects to server and handles incoming messages by converting them to speech.
 """
 import os
 import traceback
-import grpc
 from grpc_pi.client import PiClient
 from scripts.tts import tts
 
@@ -26,15 +25,8 @@ def main():
     channel = None
 
     try:
-        # Create channel with proper error handling
-        try:
-            channel = grpc.insecure_channel(server_address)
-        except Exception as channel_error:
-            print(f"Failed to create channel: {channel_error}")
-            raise
-
-        # Create client
-        client = PiClient(channel)
+        # Create client with server address
+        client = PiClient(server_address)
 
         # Set message handler
         client.set_message_handler(handle_message)  # pylint: disable=no-member
