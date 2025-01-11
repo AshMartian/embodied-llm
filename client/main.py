@@ -51,7 +51,7 @@ def audio_stream():
     try:
         print("Starting audio capture...")
         stream = setup_audio_stream(audio)
-        silence_threshold = 0.01  # Threshold for float32 values
+        silence_threshold = 0.1  # Threshold for float32 values
         is_speaking = False
         silence_chunks = 0
         total_chunks = 0
@@ -65,12 +65,12 @@ def audio_stream():
             total_chunks += 1
 
             # Reset connection if needed
-            if total_chunks >= 290:  # Reset before hitting 300
-                print("Resetting stream connection...")
-                yield AudioChunk(data=b'RESET')
-                total_chunks = 0
-                time.sleep(0.1)  # Brief pause before continuing
-                return None
+            # if total_chunks >= 290:  # Reset before hitting 300
+            #     print("Resetting stream connection...")
+            #     yield AudioChunk(data=b'RESET')
+            #     total_chunks = 0
+            #     time.sleep(0.1)  # Brief pause before continuing
+            #     return None
 
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.float32)
@@ -81,7 +81,8 @@ def audio_stream():
                 silence_chunks = 0
             elif is_speaking:
                 silence_chunks += 1
-                if silence_chunks > 20:  # About 1 second of silence
+                if silence_chunks > 10:  # About 0.5 second of silence
+                    print("Silence detected, stopping speech...")
                     yield AudioChunk(data=b'STOP')  # Signal end of speech
                     is_speaking = False
                     return None

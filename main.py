@@ -133,14 +133,8 @@ class LiveTranscriber(service_pb2_grpc.PiServerServicer):
         if request.data == b'RESET':
             print(f"\nResetting stream... Processed {chunk_count} chunks")
             self.audio_chunks = []  # Clear buffer
-            # Create fresh recorder instance
-            self.recorder = AudioToTextRecorder(
-                model="base",
-                language="en",
-                use_microphone=False,
-                spinner=False,
-                enable_realtime_transcription=False)
-            return 0  # Reset chunk count
+            self.recorder.stop()
+            self.recorder.start()
 
         chunk_count += 1
         if chunk_count % 100 == 0:
