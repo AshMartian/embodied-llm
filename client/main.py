@@ -43,27 +43,42 @@ def setup_audio_stream(audio, retry_count=0):
             print(f"Device {i}: {dev_info['name']} (rate: {int(dev_info['defaultSampleRate'])})")
 
     try:
-        # Try to use default input device first
-        default_device = audio.get_default_input_device_info()
+        # Try to find a suitable input device
+        device_index = None
+        preferred_devices = ['pulse', 'default']  # Prefer PulseAudio or default device
+
+        for i in range(audio.get_device_count()):
+            dev_info = audio.get_device_info_by_index(i)
+            if dev_info['maxInputChannels'] > 0:
+                if any(name in dev_info['name'].lower() for name in preferred_devices):
+                    device_index = i
+                    break
+
+        if device_index is None:
+            # Fall back to default device if no preferred device found
+            device_info = audio.get_default_input_device_info()
+            device_index = device_info['index']
+
+        # Open stream with explicit device selection
         stream = audio.open(
             format=FORMAT,
             channels=CHANNELS,
             rate=RATE,
             input=True,
+            input_device_index=device_index,
             frames_per_buffer=CHUNK,
-            start=False  # Don't start the stream immediately
+            start=False,  # Don't start the stream immediately
+            stream_callback=None  # Disable callback mode to prevent segfaults
         )
 
         # Test the stream before returning it
         stream.start_stream()
-        test_data = stream.read(CHUNK, exception_on_overflow=False)
-        if test_data:
-            print(f"Successfully opened default device: {default_device['name']} at {RATE}Hz")
-            return stream
-        raise RuntimeError("Stream test failed")
+        time.sleep(0.1)  # Give the stream a moment to stabilize
+        print(f"Successfully opened audio device {device_index} at {RATE}Hz")
+        return stream
 
     except (OSError, ValueError) as error:
-        print(f"Error opening default device: {error}")
+        print(f"Error opening audio device: {error}")
         if retry_count < MAX_RETRIES:
             print(f"Retrying setup (attempt {retry_count + 1}/{MAX_RETRIES})...")
             time.sleep(RECOVERY_DELAY)
@@ -86,20 +101,37 @@ def create_audio_stream():
 def audio_stream(_audio, stream, retry_count=0):
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     silence_threshold = 500  # Threshold for float32 values
+    return process_audio_stream(stream, silence_threshold, retry_count)
+
+def cleanup_stream(stream):
+    """Safely cleanup the audio stream"""
+    try:
+        if stream and stream.is_active():
+            stream.stop_stream()
+            time.sleep(RECOVERY_DELAY)  # Give more time for cleanup
+    except (OSError, RuntimeError) as cleanup_err:
+        print(f"Cleanup error: {cleanup_err}")
+
+def handle_stream_error(stream, retry_count):
+    """Handle stream errors and attempt recovery"""
+    print("\nStream error occurred")
+    cleanup_stream(stream)
+
+    if retry_count < MAX_RETRIES:
+        print(f"Attempting to recover (attempt {retry_count + 1}/{MAX_RETRIES})...")
+        time.sleep(RECOVERY_DELAY)
+        return True
+    print("Max retries exceeded, stopping stream")
+    cleanup_stream(stream)
+    return False
+
+def process_audio_stream(stream, silence_threshold, retry_count=0):
+    """Process the audio stream and yield chunks"""
     is_speaking = False
     silence_chunks = 0
     total_chunks = 0
     audio_buffer = []
     stream_active = True
-
-    def cleanup_stream():
-        """Safely cleanup the audio stream"""
-        try:
-            if stream and stream.is_active():
-                stream.stop_stream()
-                time.sleep(RECOVERY_DELAY)  # Give more time for cleanup
-        except (OSError, RuntimeError) as cleanup_err:
-            print(f"Cleanup error: {cleanup_err}")
 
     while stream_active:
         try:
@@ -107,8 +139,14 @@ def audio_stream(_audio, stream, retry_count=0):
                 stream.start_stream()
 
             data = stream.read(CHUNK, exception_on_overflow=False)
-            if not data:
-                cleanup_stream()
+
+            # Validate data before processing
+            if not data or len(data) != CHUNK * 2:  # 2 bytes per sample for FORMAT=paInt16
+                print("\nInvalid audio data received")
+                cleanup_stream(stream)
+                break
+            if not stream.is_active():
+                cleanup_stream(stream)
                 break
 
             # Convert audio data to numpy array for level detection
@@ -116,17 +154,9 @@ def audio_stream(_audio, stream, retry_count=0):
             audio_level = np.abs(audio_data).mean()
 
         except (OSError, IOError) as err:
-            print(f"\nStream error: {err}")
-            cleanup_stream()
-
-            if retry_count < MAX_RETRIES:
-                print(f"Attempting to recover (attempt {retry_count + 1}/{MAX_RETRIES})...")
-                time.sleep(RECOVERY_DELAY)
-                return audio_stream(_audio, stream, retry_count + 1)
-
-            stream_active = False
-            print("Max retries exceeded, stopping stream")
-            cleanup_stream()
+            if handle_stream_error(stream, retry_count):
+                return process_audio_stream(stream, silence_threshold, retry_count + 1)
+            cleanup_stream(stream)
             break
 
         print(f"\rProcessing chunk {total_chunks}", end='', flush=True)
