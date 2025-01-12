@@ -18,7 +18,7 @@ from scripts.tts import tts
 CHUNK = 2048  # Larger chunks for more stable streaming
 FORMAT = pyaudio.paInt16  # Using float32 for better quality
 CHANNELS = 1
-RATE = 16000  # Match Whisper's expected sample rate
+RATE = 44100  # Default sample rate that works on most systems
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -34,28 +34,29 @@ def handle_message(message):
 
 def setup_audio_stream(audio):
     """Set up and configure the audio stream"""
-    # Print available input devices
     print("\nAvailable Audio Input Devices:")
     for i in range(audio.get_device_count()):
         dev_info = audio.get_device_info_by_index(i)
         if dev_info['maxInputChannels'] > 0:  # Only show input devices
-            print(f"Device {i}: {dev_info['name']}")
+            print(f"Device {i}: {dev_info['name']} (rate: {int(dev_info['defaultSampleRate'])})")
 
     # Try to find a working input device
     for i in range(audio.get_device_count()):
         dev_info = audio.get_device_info_by_index(i)
         if dev_info['maxInputChannels'] > 0:
             try:
+                device_rate = int(dev_info['defaultSampleRate'])
                 stream = audio.open(
                     format=FORMAT,
                     input_device_index=i,
                     channels=CHANNELS,
-                    rate=RATE,
+                    rate=device_rate,
                     input=True,
                     frames_per_buffer=CHUNK)
-                print(f"Successfully opened device {i}: {dev_info['name']}")
+                print(f"Successfully opened device {i}: {dev_info['name']} at {device_rate}Hz")
                 return stream
-            except OSError:
+            except (OSError, ValueError) as error:
+                print(f"Failed to open device {i}: {error}")
                 continue
     raise RuntimeError("Could not find a working audio input device")
 
