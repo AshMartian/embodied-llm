@@ -16,9 +16,9 @@ from scripts.tts import tts
 
 
 CHUNK = 2048  # Larger chunks for more stable streaming
-FORMAT = pyaudio.paInt16  # Using float32 for better quality
+FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 44100  # Default sample rate that works on most systems
+RATE = 16000  # Default sample rate that works on most systems
 MAX_RETRIES = 3  # Maximum number of retries for audio operations
 
 def find_input_device(audio):
@@ -82,30 +82,40 @@ def audio_stream(_audio, stream, retry_count=0):
     total_chunks = 0
     audio_buffer = []
 
+    def cleanup_stream():
+        """Safely cleanup the audio stream"""
+        try:
+            if stream and not stream.is_stopped():
+                stream.stop_stream()
+            time.sleep(0.1)  # Give time for cleanup
+        except (OSError, RuntimeError) as cleanup_err:
+            print(f"Cleanup error: {cleanup_err}")
+
     while True:
         try:
             data = stream.read(CHUNK, exception_on_overflow=False)
             if not data:
+                cleanup_stream()
                 break
+
+            # Convert audio data to numpy array for level detection
+            audio_data = np.frombuffer(data, dtype=np.int16)
+            audio_level = np.abs(audio_data).mean()
 
         except OSError as err:
             print(f"\nALSA stream error: {err}")
             if retry_count < MAX_RETRIES:
                 print(f"Attempting to recover (attempt {retry_count + 1}/{MAX_RETRIES})...")
-                time.sleep(1)
-                stream.stop_stream()
+                cleanup_stream()
                 stream.start_stream()
+                time.sleep(1)
                 return audio_stream(_audio, stream, retry_count + 1)
             print("Max retries exceeded, stopping stream")
-            stream.stop_stream()
+            cleanup_stream()
             break
 
         print(f"\rProcessing chunk {total_chunks}", end='', flush=True)
         total_chunks += 1
-
-        # Convert audio data to numpy array for level detection
-        audio_data = np.frombuffer(data, dtype=np.int16)
-        audio_level = np.abs(audio_data).mean()
 
         # Check if we're detecting speech
         if audio_level > silence_threshold:
@@ -117,8 +127,6 @@ def audio_stream(_audio, stream, retry_count=0):
             silence_chunks += 1
             audio_buffer.append(data)
             yield AudioChunk(data=data)
-
-            # After sufficient silence, send STOP and reset
             if silence_chunks > 20:  # About 1 second of silence
                 print("\nSilence detected, stopping speech...")
                 yield AudioChunk(data=b'STOP')
@@ -180,10 +188,16 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down client...")
     finally:
-        client.close()
-        stream.stop_stream()
-        stream.close()
-        audio.terminate()
+        try:
+            if client:
+                client.close()
+            if stream and not stream.is_stopped():
+                stream.stop_stream()
+                stream.close()
+            if audio:
+                audio.terminate()
+        except (OSError, RuntimeError) as cleanup_err:
+            print(f"Error during cleanup: {cleanup_err}")
         print("Cleanup complete")
 
 if __name__ == "__main__":
