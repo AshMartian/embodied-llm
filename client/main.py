@@ -18,7 +18,7 @@ from scripts.tts import tts
 CHUNK = 1024  # Smaller chunks for better ALSA compatibility
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 44100  # Standard rate that works better with ALSA
+RATE = 16000  # Lower rate for better ALSA compatibility
 MAX_RETRIES = 3  # Maximum number of retries for audio operations
 RECOVERY_DELAY = 0.5  # Delay between recovery attempts
 
@@ -45,7 +45,7 @@ def setup_audio_stream(audio, retry_count=0):
     try:
         # Try to find a suitable input device
         device_index = None
-        preferred_devices = ['pulse', 'default']  # Prefer PulseAudio or default device
+        preferred_devices = ['usb', 'pulse', 'default']  # Prefer USB devices first
 
         for i in range(audio.get_device_count()):
             dev_info = audio.get_device_info_by_index(i)
@@ -59,16 +59,24 @@ def setup_audio_stream(audio, retry_count=0):
             device_info = audio.get_default_input_device_info()
             device_index = device_info['index']
 
+        # Get device-specific sample rate
+        device_info = audio.get_device_info_by_index(device_index)
+        device_rate = int(device_info['defaultSampleRate'])
+
+        # Use device's preferred rate if available
+        actual_rate = device_rate if device_rate > 0 else RATE
+
         # Open stream with explicit device selection
         stream = audio.open(
             format=FORMAT,
             channels=CHANNELS,
-            rate=RATE,
+            rate=actual_rate,
             input=True,
             input_device_index=device_index,
             frames_per_buffer=CHUNK,
             start=False,  # Don't start the stream immediately
-            stream_callback=None  # Disable callback mode to prevent segfaults
+            stream_callback=None,  # Disable callback mode to prevent segfaults
+            input_host_api_specific_stream_info=None  # Let ALSA handle the specifics
         )
 
         # Test the stream before returning it
@@ -153,7 +161,7 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
             audio_data = np.frombuffer(data, dtype=np.int16)
             audio_level = np.abs(audio_data).mean()
 
-        except (OSError, IOError) as err:
+        except (OSError, IOError):
             if handle_stream_error(stream, retry_count):
                 return process_audio_stream(stream, silence_threshold, retry_count + 1)
             cleanup_stream(stream)
