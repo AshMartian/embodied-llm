@@ -4,7 +4,6 @@ Connects to server and handles incoming messages by converting them to speech.
 """
 import os
 import time
-import ctypes
 import numpy as np
 import pyaudio
 from grpc_pi.client import PiClient
@@ -16,9 +15,8 @@ from scripts.tts import tts
 # import traceback - kept for potential future use in error handling
 
 
-CHUNK = 1024  # Smaller chunks for better ALSA compatibility
+CHUNK = 2048  # Larger chunks for more stable streaming
 FORMAT = pyaudio.paInt16
-CHANNELS = 2  # Match the USB device's channel count
 RATE = 16000  # Lower rate for better ALSA compatibility
 MAX_RETRIES = 3  # Maximum number of retries for audio operations
 RECOVERY_DELAY = 0.5  # Delay between recovery attempts
@@ -46,55 +44,20 @@ def setup_audio_stream(audio, retry_count=0):
     try:
         # Try to find a suitable input device
         device_index = None
-        preferred_devices = ['usb', 'pulse', 'default']  # Prefer USB devices first
-
         for i in range(audio.get_device_count()):
             dev_info = audio.get_device_info_by_index(i)
-            if dev_info['maxInputChannels'] > 0:
-                if any(name in dev_info['name'].lower() for name in preferred_devices):
-                    device_index = i
-                    break
+            if dev_info['maxInputChannels'] > 0 and 'USB' in dev_info['name']:
+                device_index = i
+                break
 
-        if device_index is None:
-            # Fall back to default device if no preferred device found
-            device_info = audio.get_default_input_device_info()
-            device_index = device_info['index']
-
-        # Get device-specific sample rate
-        device_info = audio.get_device_info_by_index(device_index)
-        device_rate = int(device_info['defaultSampleRate'])
-
-        # Use device's preferred rate if available
-        actual_rate = device_rate if device_rate > 0 else RATE
-
-        # Configure ALSA-specific settings
-        alsa_info = None
-        if audio.get_host_api_info_by_index(0)['name'] == 'ALSA':
-            pa_alsa = ctypes.CDLL('libportaudio.so.2')
-            alsa_info = pa_alsa.PaAlsa_EnableRealtimeScheduling(1)
-
-        # Open stream with explicit device selection
+        # Open stream with basic configuration
         stream = audio.open(
             format=FORMAT,
-            channels=CHANNELS,
-            rate=actual_rate,
+            channels=1,
+            rate=RATE,
             input=True,
-            output=False,  # Explicitly disable output
             input_device_index=device_index,
-            frames_per_buffer=CHUNK,
-            start=False,  # Don't start the stream immediately
-            stream_callback=None,  # Disable callback mode to prevent segfaults
-            input_host_api_specific_stream_info=alsa_info
-        )
-
-        # Set thread priority
-        if hasattr(stream, '_stream'):
-            pa_alsa.PaAlsa_SetStreamThreadPriority(stream._stream, 99)  # pylint: disable=protected-access
-
-        # Test the stream before returning it
-        stream.start_stream()
-        time.sleep(0.1)  # Give the stream a moment to stabilize
-        print(f"Successfully opened audio device {device_index} at {RATE}Hz")
+            frames_per_buffer=CHUNK)
         return stream
 
     except (OSError, ValueError) as error:
@@ -121,7 +84,7 @@ def create_audio_stream():
 def audio_stream(_audio, stream, retry_count=0):
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     silence_threshold = 500  # Threshold for float32 values
-    return process_audio_stream(stream, silence_threshold, retry_count)
+    yield from process_audio_stream(stream, silence_threshold, retry_count)
 
 def cleanup_stream(stream):
     """Safely cleanup the audio stream"""
@@ -161,7 +124,7 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
             data = stream.read(CHUNK, exception_on_overflow=False)
 
             # Validate data before processing
-            expected_size = CHUNK * CHANNELS * 2  # 2 bytes per sample for FORMAT=paInt16
+            expected_size = CHUNK * 2  # 2 bytes per sample for FORMAT=paInt16 (mono)
             if not data or len(data) != expected_size:
                 print(
                     f"\nInvalid audio data received: "
@@ -177,8 +140,6 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.int16)
             # If stereo, convert to mono by averaging channels
-            if CHANNELS == 2:
-                audio_data = audio_data.reshape(-1, 2).mean(axis=1)
 
             audio_level = np.abs(audio_data).mean()
 
