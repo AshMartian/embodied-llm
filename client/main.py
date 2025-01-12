@@ -3,9 +3,12 @@ Main entry point for the gRPC client.
 Connects to server and handles incoming messages by converting them to speech.
 """
 import os
+import signal
 import time
+
 import numpy as np
 import pyaudio
+
 from grpc_pi.client import PiClient
 from grpc_pi.service_pb2 import AudioChunk
 from scripts.tts import tts
@@ -20,6 +23,7 @@ FORMAT = pyaudio.paInt16
 RATE = 16000  # Lower rate for better ALSA compatibility
 MAX_RETRIES = 3  # Maximum number of retries for audio operations
 RECOVERY_DELAY = 0.5  # Delay between recovery attempts
+STREAM_TIMEOUT = 5  # Timeout for stream operations in seconds
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -56,6 +60,7 @@ def setup_audio_stream(audio, retry_count=0):
             channels=1,
             rate=RATE,
             input=True,
+            start=False,  # Don't start the stream immediately
             input_device_index=device_index,
             frames_per_buffer=CHUNK)
         return stream
@@ -119,7 +124,7 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
     while stream_active:
         try:
             if not stream.is_active():
-                stream.start_stream()
+                stream.start_stream()  # Start stream when needed
 
             data = stream.read(CHUNK, exception_on_overflow=False)
 
@@ -131,8 +136,7 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
                     f"got {len(data) if data else 0} bytes, "
                     f"expected {expected_size}"
                 )
-                cleanup_stream(stream)
-                break
+                raise IOError("Invalid audio data received")
             if not stream.is_active():
                 cleanup_stream(stream)
                 break
@@ -144,7 +148,7 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
             audio_level = np.abs(audio_data).mean()
 
         except (OSError, IOError):
-            if handle_stream_error(stream, retry_count):
+            if handle_stream_error(stream, retry_count) and retry_count < MAX_RETRIES:
                 return process_audio_stream(stream, silence_threshold, retry_count + 1)
             cleanup_stream(stream)
             break
@@ -169,11 +173,22 @@ def process_audio_stream(stream, silence_threshold, retry_count=0):
                 silence_chunks = 0
                 audio_buffer = []
 
-def main():
+def signal_handler(*_args):
+    """Handle system signals gracefully"""
+    print("\nReceived signal to terminate")
+    raise KeyboardInterrupt
+
+def setup_signal_handlers():
+    """Set up signal handlers for graceful shutdown"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+def main():  # pylint: disable=too-many-statements
     """
     Main function that starts the gRPC client.
     Establishes connection to server and handles incoming messages.
     """
+    setup_signal_handlers()
+
     # Create a gRPC channel
     server_address = os.getenv('GRPC_HOST', 'localhost:50051')
 
@@ -192,12 +207,17 @@ def main():
         """Handle the audio streaming loop"""
         nonlocal stream_retry_count
         try:
+            if not stream.is_active():
+                stream.start_stream()
+                time.sleep(0.1)  # Short delay to stabilize stream
+
             for response in client.stream_audio(audio_stream(audio, stream)):
                 if response:
                     handle_message(response)
             stream_retry_count = 0  # Reset counter on successful stream
         except Exception as stream_error:
             print(f"\nStream error: {stream_error}")
+            cleanup_stream(stream)
             stream_retry_count += 1
             time.sleep(1)  # Wait before retry
             if stream_retry_count >= MAX_RETRIES:
