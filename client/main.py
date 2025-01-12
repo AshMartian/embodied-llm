@@ -41,13 +41,23 @@ def setup_audio_stream(audio):
         if dev_info['maxInputChannels'] > 0:  # Only show input devices
             print(f"Device {i}: {dev_info['name']}")
 
-    stream = audio.open(format=FORMAT,
-                        input_device_index=1,
-                        channels=CHANNELS,
-                        rate=RATE,
-                        input=True,
-                        frames_per_buffer=CHUNK)
-    return stream
+    # Try to find a working input device
+    for i in range(audio.get_device_count()):
+        dev_info = audio.get_device_info_by_index(i)
+        if dev_info['maxInputChannels'] > 0:
+            try:
+                stream = audio.open(
+                    format=FORMAT,
+                    input_device_index=i,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK)
+                print(f"Successfully opened device {i}: {dev_info['name']}")
+                return stream
+            except OSError:
+                continue
+    raise RuntimeError("Could not find a working audio input device")
 
 def create_audio_stream():
     """Initialize and configure audio input stream"""
