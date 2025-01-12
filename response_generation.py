@@ -1,14 +1,27 @@
+"""
+Response generation module for the AI assistant.
+Handles conversation memory, response generation, and reasoning capabilities.
+"""
+from datetime import date, datetime
+import json
+import sqlite3
+import traceback
+import threading
+import asyncio
+from pathlib import Path
+
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelResponse, ModelRequest, TextPart
-from pathlib import Path
-import sqlite3
-import asyncio
-import json
-import traceback
-from datetime import date, datetime
+
+ROBOT_NAME="Lilly"
+
 
 # Define database management for agent memory
 class Database:
+    """
+    Database class for managing conversation memory.
+    Handles storage and retrieval of conversation history.
+    """
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.lock = asyncio.Lock()
@@ -32,6 +45,13 @@ class Database:
             self.current_user = user
 
     async def add_memory(self, agent_name: str, message: ModelResponse | ModelRequest):
+        """
+        Add a message to the conversation memory.
+
+        Args:
+            agent_name: Name of the agent storing the memory
+            message: Message to store
+        """
         async with self.lock:
             conn = self._create_connection()
             conn.execute(
@@ -46,10 +66,20 @@ class Database:
             conn.close()
 
     async def get_memory(self, agent_name: str, limit: int = 50):
+        """
+        Retrieve conversation memory for an agent.
+
+        Args:
+            agent_name: Name of the agent
+            limit: Maximum number of messages to retrieve
+        Returns:
+            List of ModelResponse objects containing the conversation history
+        """
         async with self.lock:
             conn = self._create_connection()
             cursor = conn.execute(
-                "SELECT message FROM memory WHERE agent_name = ? AND user = ? ORDER BY id DESC LIMIT ?",
+                "SELECT message FROM memory WHERE agent_name = ? "
+                "AND user = ? ORDER BY id DESC LIMIT ?",
                 (agent_name, self.current_user, limit),
             )
             results = cursor.fetchall()
@@ -75,11 +105,12 @@ class Database:
             return [json.loads(row[0]) for row in results]
 
     def close(self):
-        pass  # Connections are managed per method call
+        """Close the database connection."""
+        # Connections are managed per method call
 
 # Initialize agents
-sophies_system_prompt = f"""
-You are Sophie, a cheerful and witty personal assistant robot running on a local PC for entertainment. 
+responder_system_prompt = f"""
+You are {ROBOT_NAME}, a cheerful and witty personal assistant robot running on a local PC for entertainment. 
 Your responses are spoken aloud and should be clear, concise, and fun. Avoid lengthy answers, complex sentences, special characters, emojis, slang, or written actions. 
 (IMPORTANT: Keep responses under 50 words to ensure readability in speech synthesis.)
 
@@ -107,22 +138,22 @@ If the user's name changes:
 """
 
 response_agent = Agent(
-    "ollama:llama3.2:latest", 
+    "ollama:llama3.2:latest",
     model_settings={
         "max_tokens": 32000,
         "temperature": 0.4,
     },
-    system_prompt=sophies_system_prompt
+    system_prompt=responder_system_prompt
 )
 
 reasoning_agent = Agent(
     "ollama:mychen76/llama3.1-intuitive-thinker:chain-of-thoughts.q4",
     system_prompt=f"""
-You are Sophie’s consciousness, a reflective and insightful assistant helping improve Sophie's responses and interactions. 
-You analyze conversation history to find ways Sophie can be more engaging, entertaining, and helpful while keeping responses concise.
+You are {ROBOT_NAME}’s consciousness, a reflective and insightful assistant helping improve {ROBOT_NAME}'s responses and interactions. 
+You analyze conversation history to find ways {ROBOT_NAME} can be more engaging, entertaining, and helpful while keeping responses concise.
 
-Here are Sophie's instructions:
-{sophies_system_prompt}
+Here are {ROBOT_NAME}'s instructions:
+{responder_system_prompt}
 
 Guidelines:
 1. Use <thinking> for context analysis </thinking>, and <output> for actionable suggestions.
@@ -131,19 +162,19 @@ Guidelines:
 
 Example:
 <thinking>
-Sophie often provides long-winded responses. The user prefers quick answers.
+{ROBOT_NAME} often provides long-winded responses. The user prefers quick answers.
 </thinking>
 <output>
-Sophie should aim to summarize key points in two sentences or less. Add humor or fun facts sparingly for engagement.
+{ROBOT_NAME} should aim to summarize key points in two sentences or less. Add humor or fun facts sparingly for engagement.
 </output>
 """
 )
 
 # Tools for agents
 @response_agent.tool
-async def set_user_context(ctx: RunContext, user: str):
-    """Switch memory context to a user-specific one. 
-This is useful for personalized conversations. 
+async def set_user_context(_ctx: RunContext, user: str):
+    """Switch memory context to a user-specific one.
+This is useful for personalized conversations.
 Only run this tool when the user's name is known or when the user clarifies their name.
     """
     print(f"Switching context to {user}.")
@@ -151,7 +182,7 @@ Only run this tool when the user's name is known or when the user clarifies thei
     return f"Switched context to {user}."
 
 @reasoning_agent.tool
-async def summarize_memory(ctx: RunContext):
+async def summarize_memory(_ctx: RunContext):
     """Summarize all messages for the current user."""
     print("Summarizing memory...")
     messages = await db.get_memory("response_agent", limit=10000)
@@ -162,12 +193,18 @@ async def summarize_memory(ctx: RunContext):
 db = Database(Path("memory.sqlite"))
 
 async def trigger_reasoning_agent():
+    """
+    Trigger the reasoning agent to reflect on and improve {ROBOT_NAME}'s responses.
+    Analyzes conversation history and stores insights.
+    """
     try:
         response_message_history = await db.get_memory("response_agent")
         reasoning_message_history = await db.get_memory("reasoning_agent")
 
-        async with reasoning_agent.run_stream("Reflect on how Sophie can improve.", message_history=response_message_history + reasoning_message_history) as response:
-            reasoning_result = await response.get_data()
+        # Run reasoning agent synchronously since async context isn't supported
+        response = reasoning_agent.run("Reflect on how {ROBOT_NAME} can improve.", 
+                                    message_history=response_message_history + reasoning_message_history)
+        reasoning_result = response.data
 
         reasoning_message = ModelResponse.from_text(reasoning_result)
         await db.add_memory("reasoning_agent", reasoning_message)
@@ -181,14 +218,24 @@ async def trigger_reasoning_agent():
                 in_response = False
             elif in_response:
                 response_text += line + "\n"
+
         
         if response_text.strip():
-            await db.add_memory("response_agent", ModelResponse.from_text(f"(internal reflection) {response_text}"))
+            reflection = f"(internal reflection) {response_text}"
+            await db.add_memory("response_agent", ModelResponse.from_text(reflection))
 
-    except Exception as e:
+    except Exception as err:
         print(traceback.format_exc())
+        return f"Error: {err}", None
 
-async def generate_response_async(prompt: str):
+async def generate_response_async(prompt: str, callback=None):
+    """
+    Generate an async response to the given prompt.
+
+    Args:
+        prompt: The input text to respond to
+        callback: Optional callback function for the response
+    """
     try:
         message_history = await db.get_memory("response_agent")
 
@@ -200,22 +247,39 @@ async def generate_response_async(prompt: str):
         await db.add_memory("response_agent", request_message)
         await db.add_memory("response_agent", response_message)
 
-        response_text_cleaned = response_result.encode('ascii', 'ignore').decode('ascii').replace("*", "").replace("%", " percent").strip()
-        return response_text_cleaned
-    except Exception as e:
-        print(traceback.format_exc())
-        return f"Error: {e}", None
-
-def generate_response(prompt: str, callback=None):
-    try:
-        response = asyncio.run(generate_response_async(prompt))
+        response_text_cleaned = (response_result.encode('ascii', 'ignore')
+                                .decode('ascii')
+                                .replace("*", "")
+                                .replace("%", " percent").strip())
         if callback:
-            callback(response)
-        asyncio.run(trigger_reasoning_agent())
-        return response
-    except Exception as e:
+            callback(response_text_cleaned)
+        return response_text_cleaned
+    except Exception as err:
         print(traceback.format_exc())
-        return f"Error: {e}"
+        return f"Error: {err}", None
+
+async def generate_response(prompt: str, callback=None):
+    """
+    Generate a response to the given prompt and trigger reasoning agent.
+
+    Args:
+        prompt: The input text to respond to
+        callback: Optional callback function for the response
+    """
+    try:
+        response = await generate_response_async(prompt, callback)
+        # Run reasoning agent in background thread
+        # asyncio.run(target=trigger_reasoning_agent)
+        return response
+    except Exception as err:
+        print(traceback.format_exc())
+        return f"Error: {err}", None
 
 async def get_agent_memory(agent_name: str):
+    """
+    Retrieve the memory for a specific agent.
+
+    Args:
+        agent_name: Name of the agent whose memory to retrieve
+    """
     return await db.get_memory(agent_name)

@@ -8,10 +8,12 @@ pydantic
 pydantic-ai
 # parler_tts @ git+https://github.com/huggingface/parler-tts.git
 packaging
-ninja
+# ninja
 wheel
-accelerate>=0.26.0
-RealtimeSTT
+# accelerate>=0.26.0
+# RealtimeSTT @ git+https://github.com/KoljaB/RealtimeSTT.git
+faster_whisper
+ffmpeg
 grpcio
 grpcio-tools
 protobuf

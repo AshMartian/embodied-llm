@@ -2,6 +2,7 @@
 Main entry point for the gRPC client.
 Connects to server and handles incoming messages by converting them to speech.
 """
+import asyncio
 import os
 import traceback
 import time
@@ -56,52 +57,50 @@ def audio_stream():
         silence_chunks = 0
         total_chunks = 0
 
-        def process_audio():
-            nonlocal total_chunks, is_speaking, silence_chunks
+        # Buffer to accumulate audio data
+        audio_buffer = []
+
+        while True:
             data = stream.read(CHUNK, exception_on_overflow=False)
+            if not data:
+                break
 
-            if total_chunks % 100 == 0:
-                print(f"Sent {total_chunks} chunks")
+            print(f"\rProcessing chunk {total_chunks}", end='', flush=True)
             total_chunks += 1
-
-            # Reset connection if needed
-            # if total_chunks >= 290:  # Reset before hitting 300
-            #     print("Resetting stream connection...")
-            #     yield AudioChunk(data=b'RESET')
-            #     total_chunks = 0
-            #     time.sleep(0.1)  # Brief pause before continuing
-            #     return None
 
             # Convert audio data to numpy array for level detection
             audio_data = np.frombuffer(data, dtype=np.int16)
             audio_level = np.abs(audio_data).mean()
 
+            # Check if we're detecting speech
             if audio_level > silence_threshold:
                 is_speaking = True
                 silence_chunks = 0
+                audio_buffer.append(data)
+                yield AudioChunk(data=data)
             elif is_speaking:
                 silence_chunks += 1
-                if silence_chunks > 10:  # About 0.5 second of silence
-                    print("Silence detected, stopping speech...")
-                    yield AudioChunk(data=b'STOP')  # Signal end of speech
-                    is_speaking = False
-                    return None
-
-            if is_speaking:
+                audio_buffer.append(data)
                 yield AudioChunk(data=data)
-            return None
 
-        while True:
-            try:
-                yield from process_audio()
-            except IOError as io_error:
-                print(f"IOError in audio stream: {io_error}")
-                time.sleep(0.1)  # Brief pause on error
+                # After sufficient silence, send STOP and reset
+                if silence_chunks > 20:  # About 1 second of silence
+                    print("\nSilence detected, stopping speech...")
+                    yield AudioChunk(data=b'STOP')
+                    is_speaking = False
+                    silence_chunks = 0
+                    audio_buffer = []
+
+    except IOError as io_error:
+        print(f"IOError in audio stream: {io_error}")
+        time.sleep(0.1)  # Brief pause on error
+    except Exception as error:  # pylint: disable=broad-except
+        print(f"Error in audio stream: {error}")
     finally:
         stream.stop_stream()
         stream.close()
         audio.terminate()
-def main():
+async def main():
     """
     Main function that starts the gRPC client.
     Establishes connection to server and handles incoming messages.
@@ -109,11 +108,11 @@ def main():
     # Create a gRPC channel
     server_address = os.getenv('GRPC_HOST', 'localhost:50051')
 
-    def run_client():
+    async def run_client():
         nonlocal client
         for response in client.stream_audio(audio_stream()):
             if response:
-                print(f"Transcribed: {response}")
+                handle_message(response)
 
     # Create client with server address
     client = PiClient(server_address)
@@ -127,7 +126,7 @@ def main():
         try:
             while True:
                 try:
-                    run_client()
+                    await run_client()
                 except Exception as stream_error:  # pylint: disable=broad-except
                     print(f"Stream error, reconnecting: {stream_error}")
                     client.close()
@@ -143,4 +142,4 @@ def main():
         print(traceback.format_exc())
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

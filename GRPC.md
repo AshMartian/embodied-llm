@@ -1,134 +1,98 @@
-## Organizing the `.proto` File in Your gRPC Project
+# gRPC Implementation Guide
 
-### **Purpose of the `.proto` File**
-The `.proto` file defines the schema for your gRPC service. Both the server and client need access to this file to generate their respective gRPC classes.
+## Overview
+This project implements a gRPC-based communication system between a server (running on a PC) and a client (running on a Raspberry Pi). The system handles:
+
+1. Bidirectional audio streaming for speech recognition and text-to-speech
+2. Image processing
+3. Message-based communication
 
 ---
 
-### **1. Suggested Project Structure**
+## Project Structure
 
-#### **Server-Side Project (Host)**
+### Server-Side (PC)
 ```plaintext
-embodied-llm/
-├── grpc/
-│   ├── proto/
-│   │   └── service.proto      # Place the .proto file here
-│   ├── service_pb2.py         # Generated Protobuf classes
-│   ├── service_pb2_grpc.py    # Generated gRPC service classes
-├── server.py                  # Main server implementation
-└── requirements.txt
+grpc_server/
+├── proto/
+│   └── service.proto          # Service definitions
+├── server.py                  # Server implementation with LiveTranscriber
+├── service_pb2.py            # Generated Protobuf classes
+└── service_pb2_grpc.py       # Generated gRPC classes
 ```
 
-#### **Client-Side Project (Raspberry Pi)**
+### Client-Side (Raspberry Pi)
 ```plaintext
-embodied-llm/
-├── client/
-|   ├── grpc/
-│   │   ├── proto/
-│   │   │   └── service.proto      # (Optional) Copy of .proto file for reference
-│   │   ├── service_pb2.py         # Generated Protobuf classes
-│   │   ├── service_pb2_grpc.py    # Generated gRPC client classes
-│   ├── client.py                  # Main client implementation
-└── └── requirements.txt
+client/
+├── grpc_pi/
+│   ├── client.py             # gRPC client implementation
+│   ├── service_pb2.py        # Generated Protobuf classes
+│   └── service_pb2_grpc.py   # Generated gRPC classes
+├── scripts/
+│   ├── tts.py               # Text-to-speech wrapper
+│   └── tts.sh              # Piper TTS shell script
+└── main.py                 # Client entry point
 ```
 
 ---
 
-### **2. Why Separate the `.proto` File?**
+## Service Definition (service.proto)
+The gRPC service defines three main RPCs:
 
-- The `.proto` file defines the interface between the client and server.
-- Both the client and server need the same `.proto` file to generate their respective `*_pb2.py` and `*_pb2_grpc.py` files.
-- Placing it in a shared or `proto/` folder ensures clarity and maintainability.
+1. `StreamAudio`: Bidirectional streaming for real-time audio
+2. `SendImage`: Unary RPC for image processing
+3. `SendMessage`: Unary RPC for text messages
 
----
+## Implementation Details
 
-### **3. Options for Sharing Between Client and Server**
+### Server (server.py)
+- Uses `LiveTranscriber` class for audio processing
+- Implements Whisper model for speech recognition
+- Handles message generation and responses
+- Processes audio chunks and maintains conversation state
 
-#### **Option 1: Copy the `.proto` File to Both Projects**
-- Copy the `.proto` file to both `grpc/proto/` and `client/grpc/proto/`.
-- This is simple but may lead to synchronization issues if the `.proto` file changes.
+### Client (client.py)
+- Manages audio capture using PyAudio
+- Implements silence detection for speech segments
+- Handles reconnection logic
+- Uses Piper TTS for speech synthesis
 
-#### **Option 2: Use a Shared Repository**
-- Host the `.proto` file in a shared repository or submodule (e.g., a Git repo).
-- Both server and client projects can pull updates from the shared repo.
+## Dependencies
+Key dependencies include:
+- grpcio
+- grpcio-tools
+- pyaudio
+- numpy
+- faster_whisper
+- piper-tts (on Raspberry Pi)
 
-#### **Option 3: Package the `.proto` as a Dependency**
-- Create a Python package for the `.proto` file and publish it (e.g., on PyPI or a private registry).
-- Install the package as a dependency in both projects:
-  ```bash
-  pip install my-grpc-protos
-  ```
+## Running the System
 
----
-
-### **4. Generating Python Code from the `.proto` File**
-Once the `.proto` file is placed, generate the Python code for gRPC.
-
-#### **Server**
+### Server
 ```bash
-python -m grpc_tools.protoc -I./grpc/proto --python_out=./grpc --grpc_python_out=./grpc ./grpc/proto/service.proto
+python -m grpc_server.server
 ```
 
-#### **Client**
+### Client
 ```bash
-python -m grpc_tools.protoc -I./client/grpc/proto --python_out=./grpc --grpc_python_out=./grpc ./grpc/proto/service.proto
+python client/main.py
 ```
 
-This creates the following files:
-1. `service_pb2.py`: Protobuf message classes.
-2. `service_pb2_grpc.py`: gRPC service and stub classes.
+## Generating gRPC Code
+When updating the .proto file, regenerate the Python code:
 
----
+### Server
+```bash
+python -m grpc_tools.protoc -I./grpc_server/proto \
+    --python_out=./grpc_server \
+    --grpc_python_out=./grpc_server \
+    ./grpc_server/proto/service.proto
+```
 
-### **5. Best Practice**
-Keep the `.proto` file version-controlled and synced between the client and server to ensure compatibility during development and updates.
-
----
-
-### **Summary**
-- Place the `.proto` file in a dedicated `proto/` directory for both client and server projects.
-- Use gRPC tools to generate the necessary Python classes.
-- Maintain synchronization of the `.proto` file to ensure compatibility.
-
-
-## Server `.proto`
-```proto
-syntax = "proto3";
-
-service PiServer {
-    // Bidirectional streaming for audio
-    rpc StreamAudio (stream AudioChunk) returns (stream AudioResponse);
-
-    // Streaming images
-    rpc SendImage (ImageFrame) returns (ImageResponse);
-
-    // Messaging and function calls
-    rpc SendMessage (MessageRequest) returns (MessageResponse);
-}
-
-message AudioChunk {
-    bytes data = 1; // Raw audio bytes
-}
-
-message AudioResponse {
-    string text = 1; // Transcribed text or TTS response
-}
-
-message ImageFrame {
-    bytes data = 1; // Encoded image data (e.g., JPEG)
-    string timestamp = 2;
-}
-
-message ImageResponse {
-    string description = 1; // Processed image result
-}
-
-message MessageRequest {
-    string text = 1; // Command or query
-}
-
-message MessageResponse {
-    string reply = 1; // LLM response
-    string action = 2; // Optional function to invoke
-}
+### Client
+```bash
+python -m grpc_tools.protoc -I./grpc_server/proto \
+    --python_out=./client/grpc_pi \
+    --grpc_python_out=./client/grpc_pi \
+    ./grpc_server/proto/service.proto
 ```
