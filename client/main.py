@@ -19,6 +19,7 @@ CHUNK = 2048  # Larger chunks for more stable streaming
 FORMAT = pyaudio.paInt16  # Using float32 for better quality
 CHANNELS = 1
 RATE = 44100  # Default sample rate that works on most systems
+MAX_RETRIES = 3  # Maximum number of retries for audio operations
 
 def find_input_device(audio):
     """Find the best available input device"""
@@ -73,7 +74,7 @@ def create_audio_stream():
             audio.terminate()
         raise
 
-def audio_stream(_audio, stream):
+def audio_stream(_audio, stream, retry_count=0):
     """Generate stream of audio chunks from microphone when audio levels are above threshold"""
     silence_threshold = 500  # Threshold for float32 values
     is_speaking = False
@@ -82,8 +83,21 @@ def audio_stream(_audio, stream):
     audio_buffer = []
 
     while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        if not data:
+        try:
+            data = stream.read(CHUNK, exception_on_overflow=False)
+            if not data:
+                break
+
+        except OSError as err:
+            print(f"\nALSA stream error: {err}")
+            if retry_count < MAX_RETRIES:
+                print(f"Attempting to recover (attempt {retry_count + 1}/{MAX_RETRIES})...")
+                time.sleep(1)
+                stream.stop_stream()
+                stream.start_stream()
+                return audio_stream(_audio, stream, retry_count + 1)
+            print("Max retries exceeded, stopping stream")
+            stream.stop_stream()
             break
 
         print(f"\rProcessing chunk {total_chunks}", end='', flush=True)
@@ -129,23 +143,40 @@ def main():
 
     # Initialize audio once
     audio, stream = create_audio_stream()
+    stream_retry_count = 0
 
     def handle_audio_stream():
         """Handle the audio streaming loop"""
-        for response in client.stream_audio(audio_stream(audio, stream)):
-            if response:
-                handle_message(response)
+        nonlocal stream_retry_count
+        try:
+            for response in client.stream_audio(audio_stream(audio, stream)):
+                if response:
+                    handle_message(response)
+            stream_retry_count = 0  # Reset counter on successful stream
+        except Exception as stream_error:
+            print(f"\nStream error: {stream_error}")
+            stream_retry_count += 1
+            time.sleep(1)  # Wait before retry
+            if stream_retry_count >= MAX_RETRIES:
+                raise RuntimeError("Max stream retries exceeded") from stream_error
+            raise  # Re-raise to trigger reconnection
 
     try:
         while True:
             try:
                 handle_audio_stream()
-            except Exception as stream_error:  # pylint: disable=broad-except
-                print(f"Stream error, reconnecting: {stream_error}")
+            except RuntimeError as stream_error:
+                if isinstance(stream_error, RuntimeError) and \
+                    "Max stream retries exceeded" in str(stream_error): raise
+                print(f"\nReconnecting due to: {stream_error}")
                 client.close()
                 client = PiClient(server_address)
                 time.sleep(1)  # Wait before reconnecting
-
+            except (ConnectionError, OSError) as conn_error:
+                print(f"\nReconnecting due to: {conn_error}")
+                client.close()
+                client = PiClient(server_address)
+                time.sleep(1)  # Wait before reconnecting
     except KeyboardInterrupt:
         print("\nShutting down client...")
     finally:
